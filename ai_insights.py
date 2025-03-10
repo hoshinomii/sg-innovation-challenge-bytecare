@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
@@ -9,6 +9,8 @@ import requests
 import json
 import importlib.util
 import sys
+import io
+import base64
 
 # Check Python version
 print(f"Python version: {sys.version}")
@@ -24,48 +26,109 @@ except ImportError as e:
     print(f"Failed to import Google Generative AI: {e}")
     print("Please run: pip install --upgrade google-generativeai>=0.7.0")
 
+# Check Azure OpenAI availability
+print("Checking Azure OpenAI availability...")
+try:
+    import openai
+    AZURE_OPENAI_AVAILABLE = True
+    print("Azure OpenAI package successfully imported")
+except ImportError as e:
+    AZURE_OPENAI_AVAILABLE = False
+    print(f"Failed to import Azure OpenAI: {e}")
+    print("Please run: pip install --upgrade openai>=1.0.0")
+
+# Import the report generator if the module exists
+try:
+    from report_generator import save_reports, generate_markdown_summary, generate_html_dashboard
+    REPORT_GENERATOR_AVAILABLE = True
+    print("Report generator module successfully imported")
+except ImportError:
+    REPORT_GENERATOR_AVAILABLE = False
+    print("Report generator module not found - some reporting features will be limited")
+
 class AIInsightGenerator:
-    """Class to generate AI-powered insights for inventory management using Google's Gemini"""
+    """Class to generate AI-powered insights for inventory management using Google's Gemini or Azure OpenAI"""
     
-    def __init__(self, gemini_api_key: Optional[str] = None, gemini_model: Optional[str] = None):
-        """Initialize the AI insight generator with Gemini API key and model selection"""
+    def __init__(self, 
+                 gemini_api_key: Optional[str] = None, 
+                 gemini_model: Optional[str] = None,
+                 azure_api_key: Optional[str] = None,
+                 azure_endpoint: Optional[str] = None,
+                 azure_deployment: Optional[str] = None,
+                 provider: str = "auto"):
+        """Initialize the AI insight generator with API keys and model selection"""
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
         self.gemini_model_name = gemini_model or "gemini-2.0-flash"
         self.gemini_client = None
-        self.provider = "template"  # Default to template, will be changed to "gemini" if setup succeeds
         
-        # Debug API key (showing only first few characters)
-        if self.gemini_api_key:
-            print(f"Gemini API Key is set (prefix: {self.gemini_api_key[:8]}...)")
-        else:
-            print("WARNING: Gemini API key is not set")
-            return
+        self.azure_api_key = azure_api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+        self.azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        self.azure_deployment = azure_deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-35-turbo")
+        self.azure_client = None
         
-        # Initialize Gemini client
-        if GEMINI_AVAILABLE:
-            try:
-                print(f"Configuring Google Gemini with API key...")
-                self.gemini_client = genai.Client(api_key=self.gemini_api_key)
-                
-                # Test if the model works with a simple prompt
-                try:
-                    print(f"Testing Gemini model: {self.gemini_model_name}")
-                    test_response = self.gemini_client.models.generate_content(
-                        model=self.gemini_model_name,
-                        contents="Hello"
-                    )
-                    print(f"Gemini test successful. Response received: {test_response.text[:20]}...")
-                    self.provider = "gemini"  # Set to gemini only after successful test
-                except Exception as e:
-                    print(f"Gemini test failed with the client: {e}")
-                    print("Falling back to template-based insights")
-            except Exception as e:
-                print(f"Error initializing Gemini client: {str(e)}")
-                print("Falling back to template-based insights")
-        else:
-            print("WARNING: Google Generative AI package is not available")
+        self.provider = "template"  # Default to template, will be changed if setup succeeds
+        
+        # Initialize based on provider preference
+        if provider == "auto" or provider == "azure":
+            self._setup_azure_openai()
+            
+        if (provider == "auto" and self.provider == "template") or provider == "gemini":
+            self._setup_gemini()
             
         print(f"Final provider selection: {self.provider}")
+    
+    def _setup_gemini(self):
+        """Setup Google Gemini client"""
+        if not self.gemini_api_key or not GEMINI_AVAILABLE:
+            print("Gemini API key missing or package not available")
+            return
+            
+        try:
+            print(f"Configuring Google Gemini with API key...")
+            self.gemini_client = genai.Client(api_key=self.gemini_api_key)
+            
+            # Test if the model works with a simple prompt
+            try:
+                print(f"Testing Gemini model: {self.gemini_model_name}")
+                test_response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents="Hello"
+                )
+                print(f"Gemini test successful. Response received: {test_response.text[:20]}...")
+                self.provider = "gemini"  # Set to gemini only after successful test
+            except Exception as e:
+                print(f"Gemini test failed with the client: {e}")
+        except Exception as e:
+            print(f"Error initializing Gemini client: {str(e)}")
+    
+    def _setup_azure_openai(self):
+        """Setup Azure OpenAI client"""
+        if not self.azure_api_key or not self.azure_endpoint or not AZURE_OPENAI_AVAILABLE:
+            print("Azure OpenAI credentials missing or package not available")
+            return
+            
+        try:
+            print(f"Configuring Azure OpenAI client...")
+            openai.api_key = self.azure_api_key
+            openai.api_base = self.azure_endpoint
+            openai.api_type = "azure"
+            openai.api_version = "2023-07-01-preview"  # Use appropriate API version
+            
+            # Test if the model works
+            try:
+                print(f"Testing Azure OpenAI model: {self.azure_deployment}")
+                test_response = openai.chat.completions.create(
+                    model=self.azure_deployment,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=10
+                )
+                print(f"Azure OpenAI test successful")
+                self.provider = "azure"  # Set to azure only after successful test
+                self.azure_client = openai.chat.completions
+            except Exception as e:
+                print(f"Azure OpenAI test failed: {e}")
+        except Exception as e:
+            print(f"Error initializing Azure OpenAI client: {str(e)}")
     
     def generate_inventory_insights(self, restock_df: pd.DataFrame) -> str:
         """Generate natural language insights about inventory restocking needs"""
@@ -96,11 +159,19 @@ class AIInsightGenerator:
         """
         
         try:
-            response = self.gemini_client.models.generate_content(
-                model=self.gemini_model_name,
-                contents=prompt
-            )
-            return response.text
+            if self.provider == "gemini":
+                response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents=prompt
+                )
+                return response.text
+            elif self.provider == "azure":
+                response = self.azure_client.create(
+                    model=self.azure_deployment,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=500
+                )
+                return response.choices[0].message.content
         except Exception as e:
             print(f"Error generating AI insights: {e}")
             return self._generate_template_insights(restock_df)
@@ -126,11 +197,19 @@ class AIInsightGenerator:
         """
         
         try:
-            response = self.gemini_client.models.generate_content(
-                model=self.gemini_model_name,
-                contents=prompt
-            )
-            return response.text
+            if self.provider == "gemini":
+                response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents=prompt
+                )
+                return response.text
+            elif self.provider == "azure":
+                response = self.azure_client.create(
+                    model=self.azure_deployment,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200
+                )
+                return response.choices[0].message.content
         except Exception as e:
             print(f"Error explaining product trends: {e}")
             return f"Analysis for {product_name}: Sales averaging {avg_qty:.2f} units daily, with a {trend} trend."
@@ -153,11 +232,19 @@ class AIInsightGenerator:
         """
         
         try:
-            response = self.gemini_client.models.generate_content(
-                model=self.gemini_model_name,
-                contents=prompt
-            )
-            return response.text
+            if self.provider == "gemini":
+                response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents=prompt
+                )
+                return response.text
+            elif self.provider == "azure":
+                response = self.azure_client.create(
+                    model=self.azure_deployment,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=150
+                )
+                return response.choices[0].message.content
         except Exception as e:
             print(f"Error generating restock reasoning: {e}")
             return "Recommended based on predicted demand plus safety stock to prevent stockouts."
@@ -183,15 +270,228 @@ Restock recommendations are based on historical sales patterns, recent trends, a
 """
 
 
+def create_product_trend_graph(product_data: pd.DataFrame, product_name: str, stockcode: str) -> str:
+    """Create a graph showing the sales trend for a specific product and return as base64 image"""
+    plt.figure(figsize=(10, 6))
+    
+    # Create a time series plot of quantities
+    if 'InvoiceDate' in product_data.columns and len(product_data) > 0:
+        # Ensure data is sorted by date
+        product_data = product_data.sort_values('InvoiceDate')
+        # Create the time series plot
+        plt.plot(product_data['InvoiceDate'], product_data['Quantity'], marker='o', linestyle='-')
+        plt.title(f'Sales Trend for {product_name} (Code: {stockcode})')
+        plt.xlabel('Date')
+        plt.ylabel('Quantity Sold')
+        plt.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+    else:
+        # If no time data available, create a bar chart of quantities
+        plt.bar(range(len(product_data)), product_data['Quantity'])
+        plt.title(f'Sales Distribution for {product_name} (Code: {stockcode})')
+        plt.xlabel('Sales Event')
+        plt.ylabel('Quantity Sold')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+    
+    # Convert plot to base64 string for embedding in markdown
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=100)
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    plt.close()
+    
+    return f"![{product_name} Sales Trend](data:image/png;base64,{image_base64})"
+
+def create_top_items_graph(restock_df: pd.DataFrame) -> str:
+    """Create a graph showing top items to restock and return as base64 image"""
+    # Take top 10 items for the graph
+    top_items = restock_df.head(10).copy()
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Create a horizontal bar chart with product descriptions and recommended restock quantities
+    descriptions = [str(desc)[:30] + '...' if len(str(desc)) > 30 else str(desc) for desc in top_items['Description']]
+    y_pos = np.arange(len(descriptions))
+    
+    plt.barh(y_pos, top_items['recommended_restock'], align='center')
+    plt.yticks(y_pos, descriptions)
+    plt.xlabel('Recommended Restock Quantity')
+    plt.title('Top 10 Items to Restock')
+    plt.tight_layout()
+    
+    # Convert plot to base64 string for embedding in markdown
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=100)
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    plt.close()
+    
+    return f"![Top 10 Items to Restock](data:image/png;base64,{image_base64})"
+
+def save_report_as_html(report: str, output_path: str = "inventory_report.html"):
+    """Save the markdown report as an HTML file for easy viewing of embedded images
+    
+    Args:
+        report: The markdown report with embedded base64 images
+        output_path: Path to save the HTML file
+    """
+    try:
+        # Try to import markdown with extension support
+        import markdown
+        from markdown.extensions import tables
+        
+        # Convert markdown to HTML with table extension
+        html = markdown.markdown(report, extensions=['tables', 'markdown.extensions.tables'])
+        
+        # Create a complete HTML document
+        html_doc = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Management Report</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        h1 {{ color: #2c3e50; }}
+        h2 {{ color: #3498db; margin-top: 30px; }}
+        h3 {{ color: #2980b9; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        tr:nth-child(even) {{ background-color: #f9f9f9; }}
+        tr:hover {{ background-color: #f1f1f1; }}
+        img {{ max-width: 100%; height: auto; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    {html}
+</body>
+</html>"""
+        
+        # Write to file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_doc)
+        
+        print(f"Report saved as HTML: {output_path}")
+        
+        return output_path
+    except ImportError as e:
+        print(f"Error importing markdown: {e}")
+        print("Could not import markdown module. Install it using: pip install markdown")
+        
+        # As a fallback, we'll create a basic HTML version manually
+        try:
+            # Manual markdown-to-html conversion for tables
+            html_content = report
+            
+            # Convert markdown tables to HTML tables
+            import re
+            
+            # Find and convert markdown tables
+            table_pattern = r'\|(.+)\|\n\|[-|]+\|\n((?:\|.+\|\n)+)'
+            
+            def convert_table(match):
+                headers = match.group(1).strip().split('|')
+                headers = [h.strip() for h in headers if h.strip()]
+                
+                rows_text = match.group(2)
+                rows = rows_text.strip().split('\n')
+                
+                html_table = '<table>\n  <thead>\n    <tr>\n'
+                for header in headers:
+                    html_table += f'      <th>{header.strip()}</th>\n'
+                html_table += '    </tr>\n  </thead>\n  <tbody>\n'
+                
+                for row in rows:
+                    if '|' not in row:
+                        continue
+                    cells = row.strip().split('|')
+                    cells = [c.strip() for c in cells if c.strip() != '']
+                    
+                    html_table += '    <tr>\n'
+                    for cell in cells:
+                        html_table += f'      <td>{cell.strip()}</td>\n'
+                    html_table += '    </tr>\n'
+                
+                html_table += '  </tbody>\n</table>'
+                return html_table
+            
+            html_content = re.sub(table_pattern, convert_table, html_content)
+            
+            # Convert headings
+            html_content = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html_content, flags=re.MULTILINE)
+            html_content = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html_content, flags=re.MULTILINE)
+            html_content = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html_content, flags=re.MULTILINE)
+            
+            # Convert paragraphs
+            html_content = re.sub(r'^\s*$', '<br>', html_content, flags=re.MULTILINE)
+            
+            # Create complete HTML document
+            html_doc = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Management Report</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        h1 {{ color: #2c3e50; }}
+        h2 {{ color: #3498db; margin-top: 30px; }}
+        h3 {{ color: #2980b9; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        tr:nth-child(even) {{ background-color: #f9f9f9; }}
+        tr:hover {{ background-color: #f1f1f1; }}
+        img {{ max-width: 100%; height: auto; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    {html_content}
+</body>
+</html>"""
+            
+            # Write to file
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(html_doc)
+            
+            print(f"Report saved as HTML: {output_path}")
+            return output_path
+            
+        except Exception as e2:
+            print(f"Error creating manual HTML: {e2}")
+            
+            # Save as plain markdown instead
+            with open(output_path.replace('.html', '.md'), 'w', encoding='utf-8') as f:
+                f.write(report)
+            
+            print(f"Report saved as Markdown: {output_path.replace('.html', '.md')}")
+            return output_path.replace('.html', '.md')
+    except Exception as e:
+        print(f"Error saving report: {e}")
+        return None
+
+
+# Modify the generate_report_with_insights function to also save the report
 def generate_report_with_insights(restock_df: pd.DataFrame, 
                                   feature_data: pd.DataFrame, 
                                   gemini_api_key: Optional[str] = None,
-                                  gemini_model: Optional[str] = None) -> str:
-    """Generate a comprehensive report with AI-enhanced insights"""
+                                  gemini_model: Optional[str] = None,
+                                  azure_api_key: Optional[str] = None,
+                                  azure_endpoint: Optional[str] = None,
+                                  azure_deployment: Optional[str] = None,
+                                  save_html: bool = True,
+                                  output_path: str = "inventory_report.html") -> str:
+    """Generate a comprehensive report with AI-enhanced insights and visualizations"""
     
     insight_generator = AIInsightGenerator(
         gemini_api_key=gemini_api_key, 
-        gemini_model=gemini_model or "gemini-2.0-flash"
+        gemini_model=gemini_model or "gemini-2.0-flash",
+        azure_api_key=azure_api_key,
+        azure_endpoint=azure_endpoint,
+        azure_deployment=azure_deployment
     )
     
     # Generate overall inventory insights
@@ -199,6 +499,9 @@ def generate_report_with_insights(restock_df: pd.DataFrame,
     
     # Top 10 items section with demand and restock amounts
     top_10_items = restock_df.head(10).copy()
+    
+    # Create visualization for top 10 items
+    top_items_graph = create_top_items_graph(restock_df)
     
     # Generate specific insights for top products
     product_insights = []
@@ -212,12 +515,16 @@ def generate_report_with_insights(restock_df: pd.DataFrame,
             trend_explanation = insight_generator.explain_product_trends(product_data, product_name)
             restock_reasoning = insight_generator.generate_restock_reasoning(row)
             
+            # Create graph for this product
+            product_graph = create_product_trend_graph(product_data, product_name, idx)
+            
             product_insights.append({
                 'product_code': idx,
                 'product_name': product_name,
                 'recommended_restock': row['recommended_restock'],
                 'trend_explanation': trend_explanation,
-                'restock_reasoning': restock_reasoning
+                'restock_reasoning': restock_reasoning,
+                'graph': product_graph
             })
         except Exception as e:
             print(f"Error generating insights for product {idx}: {e}")
@@ -231,7 +538,11 @@ Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
 {inventory_summary.strip()}
 
 ## Top 10 Items for Restocking
-The following table shows the top 10 items that need attention, with their predicted weekly demand and recommended restock quantities:
+The following chart shows the top 10 items that need restocking:
+
+{top_items_graph}
+
+The following table provides detailed information on these items:
 
 """
     
@@ -256,6 +567,8 @@ The following table shows the top 10 items that need attention, with their predi
 ### {p['product_name']} (Code: {p['product_code']})
 **Recommended Restock Quantity:** {p['recommended_restock']}
 
+{p['graph']}
+
 **Trend Analysis:**
 {p['trend_explanation'].strip()}
 
@@ -270,4 +583,145 @@ of inventory needs. These insights should be reviewed alongside business knowled
 conditions to finalize inventory decisions.
 """
     
+    # Save report if requested
+    if save_html:
+        saved_path = save_report_as_html(report, output_path)
+        if saved_path:
+            report += f"\n\n---\nThis report has been saved to: {saved_path}"
+    
     return report
+
+# Add this function at the end of the file
+def generate_inventory_reports(restock_df: pd.DataFrame, 
+                              feature_data: pd.DataFrame,
+                              md_output_path: str = "inventory_summary.md",
+                              html_output_path: str = "inventory_dashboard.html",
+                              pdf_output_path: str = "inventory_report.pdf") -> Tuple[str, str, Optional[str]]:
+    """
+    Generate brief markdown summary, HTML dashboard, and PDF report for inventory management
+    
+    Args:
+        restock_df: DataFrame containing restock recommendations
+        feature_data: DataFrame with historical sales data
+        md_output_path: Path to save the markdown report
+        html_output_path: Path to save the HTML dashboard
+        pdf_output_path: Path to save the PDF report
+        
+    Returns:
+        Tuple of (markdown_path, html_path, pdf_path) with the saved file paths
+    """
+    if REPORT_GENERATOR_AVAILABLE:
+        # Use the dedicated report generator module
+        return save_reports(restock_df, feature_data, md_output_path, html_output_path, pdf_output_path)
+    else:
+        # Fall back to simplified report generation
+        print("Using simplified report generation (report_generator module not available)")
+        
+        # Generate and save markdown report
+        markdown_report = f"""# Inventory Restock Summary
+Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+## Overview
+- Total products to restock: {len(restock_df)}
+- Urgent items: {len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])}
+- Total units to restock: {int(restock_df['recommended_restock'].sum())}
+
+## Top 5 Items to Restock
+| Product | Recommended Restock |
+|---------|---------------------|"""
+
+        # Add top 5 items
+        top_items = restock_df.head(5)
+        for idx, row in top_items.iterrows():
+            product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            markdown_report += f"\n| {product_name} | {row['recommended_restock']} |"
+        
+        # Save markdown report
+        with open(md_output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_report)
+            
+        # Generate a simplified HTML report
+        html_report = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Inventory Dashboard</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; }}
+        th {{ background-color: #f2f2f2; }}
+    </style>
+</head>
+<body>
+    <h1>Inventory Dashboard</h1>
+    <p>Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    
+    <h2>Summary</h2>
+    <ul>
+        <li>Total products to restock: {len(restock_df)}</li>
+        <li>Urgent items: {len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])}</li>
+        <li>Total units to restock: {int(restock_df['recommended_restock'].sum())}</li>
+    </ul>
+    
+    <h2>Inventory Restock Table</h2>
+    <table>
+        <tr>
+            <th>Product</th>
+            <th>Recommended Restock</th>
+        </tr>"""
+        
+        # Add all items to the HTML table
+        for idx, row in restock_df.iterrows():
+            product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            html_report += f"""
+        <tr>
+            <td>{product_name}</td>
+            <td>{row['recommended_restock']}</td>
+        </tr>"""
+            
+        # Close HTML
+        html_report += """
+    </table>
+</body>
+</html>"""
+        
+        # Save HTML report
+        with open(html_output_path, 'w', encoding='utf-8') as f:
+            f.write(html_report)
+        
+        # Always try to generate PDF
+        pdf_path = None
+        try:
+            # Check if we can use weasyprint for PDF generation
+            print("Attempting to generate PDF report...")
+            try:
+                import weasyprint
+                # Generate PDF from HTML
+                pdf = weasyprint.HTML(string=html_report).write_pdf()
+                with open(pdf_output_path, 'wb') as f:
+                    f.write(pdf)
+                pdf_path = pdf_output_path
+                print(f"PDF report successfully generated at: {pdf_output_path}")
+            except ImportError:
+                # Try using pdfkit if weasyprint is not available
+                try:
+                    import pdfkit
+                    pdfkit.from_string(html_report, pdf_output_path)
+                    pdf_path = pdf_output_path
+                    print(f"PDF report successfully generated at: {pdf_output_path}")
+                except ImportError:
+                    # Try using a markdown to pdf converter if available
+                    if 'markdown_to_pdf' in globals():
+                        pdf_path = markdown_to_pdf(markdown_report, pdf_output_path)
+                        print(f"PDF report successfully generated at: {pdf_output_path}")
+                    else:
+                        print("PDF generation libraries not available. Please install weasyprint or pdfkit:")
+                        print("  pip install weasyprint")
+                        print("  pip install pdfkit")
+                except Exception as e:
+                    print(f"Error generating PDF with pdfkit: {e}")
+        except Exception as e:
+            print(f"Error generating PDF: {e}")
+            print("PDF generation failed, but HTML and Markdown reports are still available.")
+        
+        return md_output_path, html_output_path, pdf_path
