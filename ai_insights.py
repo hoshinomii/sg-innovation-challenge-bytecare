@@ -29,7 +29,7 @@ except ImportError as e:
 # Check Azure OpenAI availability
 print("Checking Azure OpenAI availability...")
 try:
-    import openai
+    from openai import AzureOpenAI
     AZURE_OPENAI_AVAILABLE = True
     print("Azure OpenAI package successfully imported")
 except ImportError as e:
@@ -55,6 +55,7 @@ class AIInsightGenerator:
                  azure_api_key: Optional[str] = None,
                  azure_endpoint: Optional[str] = None,
                  azure_deployment: Optional[str] = None,
+                 azure_api_version: Optional[str] = "2023-07-01-preview",
                  provider: str = "auto"):
         """Initialize the AI insight generator with API keys and model selection"""
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
@@ -64,6 +65,7 @@ class AIInsightGenerator:
         self.azure_api_key = azure_api_key or os.environ.get("AZURE_OPENAI_API_KEY")
         self.azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
         self.azure_deployment = azure_deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-35-turbo")
+        self.azure_api_version = azure_api_version
         self.azure_client = None
         
         self.provider = "template"  # Default to template, will be changed if setup succeeds
@@ -109,22 +111,23 @@ class AIInsightGenerator:
             
         try:
             print(f"Configuring Azure OpenAI client...")
-            openai.api_key = self.azure_api_key
-            openai.api_base = self.azure_endpoint
-            openai.api_type = "azure"
-            openai.api_version = "2023-07-01-preview"  # Use appropriate API version
+            # Use the newer AzureOpenAI client approach from script.py
+            self.azure_client = AzureOpenAI(
+                azure_endpoint=self.azure_endpoint,
+                api_key=self.azure_api_key,
+                api_version=self.azure_api_version,
+            )
             
             # Test if the model works
             try:
                 print(f"Testing Azure OpenAI model: {self.azure_deployment}")
-                test_response = openai.chat.completions.create(
+                test_response = self.azure_client.chat.completions.create(
                     model=self.azure_deployment,
                     messages=[{"role": "user", "content": "Hello"}],
                     max_tokens=10
                 )
                 print(f"Azure OpenAI test successful")
                 self.provider = "azure"  # Set to azure only after successful test
-                self.azure_client = openai.chat.completions
             except Exception as e:
                 print(f"Azure OpenAI test failed: {e}")
         except Exception as e:
@@ -166,7 +169,8 @@ class AIInsightGenerator:
                 )
                 return response.text
             elif self.provider == "azure":
-                response = self.azure_client.create(
+                # Updated to use the new Azure OpenAI client pattern
+                response = self.azure_client.chat.completions.create(
                     model=self.azure_deployment,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=500
@@ -204,7 +208,8 @@ class AIInsightGenerator:
                 )
                 return response.text
             elif self.provider == "azure":
-                response = self.azure_client.create(
+                # Updated to use the new Azure OpenAI client pattern
+                response = self.azure_client.chat.completions.create(
                     model=self.azure_deployment,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=200
@@ -239,7 +244,8 @@ class AIInsightGenerator:
                 )
                 return response.text
             elif self.provider == "azure":
-                response = self.azure_client.create(
+                # Updated to use the new Azure OpenAI client pattern
+                response = self.azure_client.chat.completions.create(
                     model=self.azure_deployment,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=150
@@ -375,21 +381,16 @@ def save_report_as_html(report: str, output_path: str = "inventory_report.html")
             f.write(html_doc)
         
         print(f"Report saved as HTML: {output_path}")
-        
         return output_path
-    except ImportError as e:
-        print(f"Error importing markdown: {e}")
-        print("Could not import markdown module. Install it using: pip install markdown")
         
-        # As a fallback, we'll create a basic HTML version manually
+    except ImportError:
+        print("Markdown module not available. Using manual HTML conversion.")
         try:
             # Manual markdown-to-html conversion for tables
             html_content = report
             
-            # Convert markdown tables to HTML tables
-            import re
-            
             # Find and convert markdown tables
+            import re
             table_pattern = r'\|(.+)\|\n\|[-|]+\|\n((?:\|.+\|\n)+)'
             
             def convert_table(match):
@@ -460,8 +461,8 @@ def save_report_as_html(report: str, output_path: str = "inventory_report.html")
             print(f"Report saved as HTML: {output_path}")
             return output_path
             
-        except Exception as e2:
-            print(f"Error creating manual HTML: {e2}")
+        except Exception as e:
+            print(f"Error creating manual HTML: {e}")
             
             # Save as plain markdown instead
             with open(output_path.replace('.html', '.md'), 'w', encoding='utf-8') as f:
@@ -471,7 +472,17 @@ def save_report_as_html(report: str, output_path: str = "inventory_report.html")
             return output_path.replace('.html', '.md')
     except Exception as e:
         print(f"Error saving report: {e}")
-        return None
+        
+        # Save as plain markdown as a last resort
+        try:
+            markdown_path = output_path.replace('.html', '.md')
+            with open(markdown_path, 'w', encoding='utf-8') as f:
+                f.write(report)
+            print(f"Report saved as Markdown: {markdown_path}")
+            return markdown_path
+        except:
+            print("Failed to save report in any format")
+            return None
 
 
 # Modify the generate_report_with_insights function to also save the report
