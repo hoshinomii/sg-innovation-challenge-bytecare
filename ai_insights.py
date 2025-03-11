@@ -59,7 +59,7 @@ class AIInsightGenerator:
                  provider: str = "auto"):
         """Initialize the AI insight generator with API keys and model selection"""
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
-        self.gemini_model_name = gemini_model or "gemini-2.0-flash"
+        self.gemini_model_name = gemini_model or os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
         self.gemini_client = None
         
         self.azure_api_key = azure_api_key or os.environ.get("AZURE_OPENAI_API_KEY")
@@ -70,66 +70,100 @@ class AIInsightGenerator:
         
         self.provider = "template"  # Default to template, will be changed if setup succeeds
         
-        # Initialize based on provider preference
-        if provider == "auto" or provider == "azure":
-            self._setup_azure_openai()
-            
-        if (provider == "auto" and self.provider == "template") or provider == "gemini":
+        # Check for DEFAULT_AI_PROVIDER environment variable
+        env_provider = os.environ.get("DEFAULT_AI_PROVIDER", "").lower()
+        always_use_ai = os.environ.get("ALWAYS_USE_AI", "").lower() in ["true", "1", "yes"]
+        
+        print(f"Environment variables: DEFAULT_AI_PROVIDER={env_provider}, ALWAYS_USE_AI={always_use_ai}")
+        
+        # Override provider based on environment variable if specified
+        if provider == "auto" and env_provider in ["gemini", "openai"]:
+            print(f"Using provider from environment variable: {env_provider}")
+            provider = env_provider
+        
+        # Set up the specified provider
+        if provider == "gemini":
+            print("Setting up Gemini as the provider")
             self._setup_gemini()
+        elif provider == "azure" or provider == "openai":
+            print("Setting up Azure OpenAI as the provider")
+            self._setup_azure_openai()
+        elif provider == "auto":
+            # Try both providers in sequence, starting with the default from env if available
+            print("Auto-selecting provider")
             
-        print(f"Final provider selection: {self.provider}")
+            if env_provider == "gemini":
+                # Try Gemini first, then fall back to Azure
+                self._setup_gemini()
+                if self.provider == "template":  # If Gemini setup failed
+                    print("Gemini setup failed, trying Azure OpenAI")
+                    self._setup_azure_openai()
+            else:
+                # Try Azure first, then fall back to Gemini
+                self._setup_azure_openai()
+                if self.provider == "template":  # If Azure setup failed
+                    print("Azure OpenAI setup failed, trying Gemini")
+                    self._setup_gemini()
+                    
+        print(f"Final selected provider: {self.provider}")
     
     def _setup_gemini(self):
         """Setup Google Gemini client"""
-        if not self.gemini_api_key or not GEMINI_AVAILABLE:
-            print("Gemini API key missing or package not available")
-            return
-            
         try:
-            print(f"Configuring Google Gemini with API key...")
-            self.gemini_client = genai.Client(api_key=self.gemini_api_key)
-            
-            # Test if the model works with a simple prompt
-            try:
-                print(f"Testing Gemini model: {self.gemini_model_name}")
-                test_response = self.gemini_client.models.generate_content(
-                    model=self.gemini_model_name,
-                    contents="Hello"
-                )
-                print(f"Gemini test successful. Response received: {test_response.text[:20]}...")
-                self.provider = "gemini"  # Set to gemini only after successful test
-            except Exception as e:
-                print(f"Gemini test failed with the client: {e}")
+            if GEMINI_AVAILABLE and self.gemini_api_key:
+                print(f"Configuring Gemini client with model {self.gemini_model_name}...")
+                genai.configure(api_key=self.gemini_api_key)
+                self.gemini_client = genai
+                
+                # Test if the model works
+                try:
+                    test_response = self.gemini_client.models.generate_content(
+                        model=self.gemini_model_name,
+                        contents="Hello"
+                    )
+                    print(f"Gemini test successful")
+                    self.provider = "gemini"  # Set to gemini only after successful test
+                except Exception as e:
+                    print(f"Gemini test failed: {e}")
+            else:
+                if not GEMINI_AVAILABLE:
+                    print("Gemini API not available - package not installed")
+                if not self.gemini_api_key:
+                    print("Gemini API key not provided")
         except Exception as e:
             print(f"Error initializing Gemini client: {str(e)}")
     
     def _setup_azure_openai(self):
         """Setup Azure OpenAI client"""
-        if not self.azure_api_key or not self.azure_endpoint or not AZURE_OPENAI_AVAILABLE:
-            print("Azure OpenAI credentials missing or package not available")
-            return
-            
         try:
             print(f"Configuring Azure OpenAI client...")
             # Use the newer AzureOpenAI client approach from script.py
-            self.azure_client = AzureOpenAI(
-                azure_endpoint=self.azure_endpoint,
-                api_key=self.azure_api_key,
-                api_version=self.azure_api_version,
-            )
-            
-            # Test if the model works
-            try:
-                print(f"Testing Azure OpenAI model: {self.azure_deployment}")
-                test_response = self.azure_client.chat.completions.create(
-                    model=self.azure_deployment,
-                    messages=[{"role": "user", "content": "Hello"}],
-                    max_tokens=10
+            if AZURE_OPENAI_AVAILABLE and self.azure_api_key and self.azure_endpoint:
+                self.azure_client = AzureOpenAI(
+                    azure_endpoint=self.azure_endpoint,
+                    api_key=self.azure_api_key,
+                    api_version=self.azure_api_version,
                 )
-                print(f"Azure OpenAI test successful")
-                self.provider = "azure"  # Set to azure only after successful test
-            except Exception as e:
-                print(f"Azure OpenAI test failed: {e}")
+                
+                # Test if the model works
+                try:
+                    print(f"Testing Azure OpenAI model: {self.azure_deployment}")
+                    test_response = self.azure_client.chat.completions.create(
+                        model=self.azure_deployment,
+                        messages=[{"role": "user", "content": "Hello"}],
+                        max_tokens=10
+                    )
+                    print(f"Azure OpenAI test successful")
+                    self.provider = "azure"  # Set to azure only after successful test
+                except Exception as e:
+                    print(f"Azure OpenAI test failed: {e}")
+            else:
+                if not AZURE_OPENAI_AVAILABLE:
+                    print("Azure OpenAI API not available - package not installed")
+                if not self.azure_api_key:
+                    print("Azure OpenAI API key not provided")
+                if not self.azure_endpoint:
+                    print("Azure OpenAI endpoint not provided")
         except Exception as e:
             print(f"Error initializing Azure OpenAI client: {str(e)}")
     
