@@ -23,11 +23,15 @@ var/
 .installed.cfg
 *.egg
 
-# Generated files
-restock_recommendations.csv
-inventory_insights_report.md
-sales_analysis.png
-*.pkl
+# Keep dist directory structure but ignore contents
+dist/**/*
+!dist/.gitkeep
+!dist/reports/.gitkeep
+!dist/data/.gitkeep
+
+# Keep models directory structure but ignore contents
+models/**/*
+!models/.gitkeep
 
 # Editor directories and files
 .idea/

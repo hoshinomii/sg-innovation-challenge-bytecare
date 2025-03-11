@@ -8,8 +8,11 @@ import argparse
 # Load environment variables from .env file
 load_dotenv()
 
-def compare_providers(force_provider=None):
+def compare_providers(force_provider=None, output_dir="dist/reports"):
     """Compare insights from different AI providers"""
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
     # Create a sample dataframe for demonstration
     restock_df = pd.DataFrame({
         'Description': ['Widget A', 'Widget B', 'Widget C', 'Widget D', 'Widget E'],
@@ -72,6 +75,12 @@ def compare_providers(force_provider=None):
             print(insights)
             print("---\n")
             
+            # Save provider output to a file
+            provider_output_path = f"{output_dir}/{provider}_insights_test.txt"
+            with open(provider_output_path, 'w') as f:
+                f.write(insights)
+            print(f"Saved {provider} output to {provider_output_path}")
+            
             results[provider] = {
                 "insights": insights,
                 "duration": duration,
@@ -108,6 +117,30 @@ def compare_providers(force_provider=None):
             
             if recommendation.split()[0] != default_provider:
                 print(f"\nConsider changing DEFAULT_AI_PROVIDER in .env to {recommendation.split()[0]} for better performance")
+        
+        # Save comparison results
+        comparison_path = f"{output_dir}/provider_comparison_results.txt"
+        with open(comparison_path, 'w') as f:
+            f.write("=== Provider Comparison ===\n")
+            for provider, result in results.items():
+                status = result['status'] if isinstance(result, dict) else 'error'
+                duration = result.get('duration', 0) if isinstance(result, dict) else 0
+                f.write(f"{provider.upper()}: Status={status}, Time={duration:.2f}s\n")
+            
+            # Add recommendation if available
+            if all(isinstance(result, dict) and result['status'] == 'success' for result in results.values()):
+                gemini_time = results.get('gemini', {}).get('duration', float('inf'))
+                openai_time = results.get('openai', {}).get('duration', float('inf'))
+                
+                if gemini_time < openai_time:
+                    recommendation = "gemini (faster response)"
+                else:
+                    recommendation = "openai (faster response)"
+                    
+                f.write(f"\nRecommended provider: {recommendation}\n")
+                f.write(f"Current default provider: {default_provider}\n")
+            
+        print(f"Comparison results saved to {comparison_path}")
     
     return results
 
@@ -115,6 +148,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare different AI providers for inventory insights")
     parser.add_argument("--provider", choices=["gemini", "openai"], 
                       help="Force a specific provider instead of comparing both")
+    parser.add_argument("--output-dir", default="dist/reports",
+                      help="Directory to save output files")
     
     args = parser.parse_args()
-    compare_providers(args.provider)
+    compare_providers(args.provider, args.output_dir)

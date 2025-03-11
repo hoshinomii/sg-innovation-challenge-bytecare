@@ -222,8 +222,14 @@ def build_demand_model(data):
     
     print(f"\nBest model: {max(results.items(), key=lambda x: x[1]['r2'])[0]}")
     
-    # Save the best model
-    joblib.dump(best_model, 'demand_prediction_model.pkl')
+    # Create directory if it doesn't exist
+    model_dir = 'dist/models'
+    os.makedirs(model_dir, exist_ok=True)
+    
+    # Save the best model to the models directory
+    model_path = os.path.join(model_dir, 'demand_prediction_model.pkl')
+    joblib.dump(best_model, model_path)
+    print(f"Model saved to {model_path}")
     
     return best_model, X_test, y_test, results
 
@@ -324,15 +330,24 @@ def generate_ai_insights(restock_df, feature_data, gemini_api_key=None, gemini_m
     
     print(f"Generating AI-powered insights and analysis using Google Gemini...")
     try:
+        # Ensure reports directory exists
+        reports_dir = 'dist/reports'
+        os.makedirs(reports_dir, exist_ok=True)
+        
+        # Generate report with path to reports directory
+        output_path = os.path.join(reports_dir, 'inventory_insights_report.html')
         report = generate_report_with_insights(restock_df, feature_data, 
                                               gemini_api_key=gemini_api_key,
-                                              gemini_model=gemini_model)
+                                              gemini_model=gemini_model,
+                                              save_html=True,
+                                              output_path=output_path)
         
-        # Save the report to a file
-        with open('inventory_insights_report.md', 'w') as f:
+        # Save the markdown report to the reports directory
+        md_path = os.path.join(reports_dir, 'inventory_insights_report.md')
+        with open(md_path, 'w') as f:
             f.write(report)
         
-        print("AI insights generated and saved to 'inventory_insights_report.md'")
+        print(f"AI insights generated and saved to '{md_path}' and '{output_path}'")
         return report
     except Exception as e:
         print(f"Error generating AI insights: {e}")
@@ -399,6 +414,14 @@ def main():
     # Calculate restock recommendations
     restock_recommendations = calculate_restock_recommendations(feature_data, model)
     
+    # Ensure directory exists for saving CSV
+    reports_dir = 'dist/reports'
+    os.makedirs(reports_dir, exist_ok=True)
+    
+    # Save recommendations to CSV in reports directory
+    csv_path = os.path.join(reports_dir, 'restock_recommendations.csv')
+    restock_recommendations.to_csv(csv_path)
+    
     # Print top recommendations
     print("\nTop 10 Restock Recommendations:")
     print(restock_recommendations[['Description', 'predicted_weekly_demand', 'recommended_restock']].head(10))
@@ -412,9 +435,9 @@ def main():
                                         gemini_api_key=gemini_api_key,
                                         gemini_model=gemini_model)
     
-    print("\nDone! Restock recommendations saved to 'restock_recommendations.csv'")
+    print(f"\nDone! Restock recommendations saved to '{csv_path}'")
     if AI_INSIGHTS_AVAILABLE:
-        print("AI-powered insights saved to 'inventory_insights_report.md'")
+        print(f"AI-powered insights saved to '{os.path.join(reports_dir, 'inventory_insights_report.md')}'")
 
 if __name__ == "__main__":
     main()

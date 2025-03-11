@@ -34,5 +34,9 @@ fi
 
 python -c "import pandas; import numpy; import matplotlib; import seaborn; import sklearn; print('Core data science packages successfully imported')"
 
+# Create project directories
+echo "Creating project directories..."
+python create_directories.py
+
 echo "Installation complete. Please run the test_gemini.py script to verify the API connection."
 echo "python test_gemini.py"

@@ -370,7 +370,7 @@ def create_top_items_graph(restock_df: pd.DataFrame) -> str:
     
     return f"![Top 10 Items to Restock](data:image/png;base64,{image_base64})"
 
-def save_report_as_html(report: str, output_path: str = "inventory_report.html"):
+def save_report_as_html(report: str, output_path: str = "dist/reports/inventory_report.html"):
     """Save the markdown report as an HTML file for easy viewing of embedded images
     
     Args:
@@ -378,6 +378,9 @@ def save_report_as_html(report: str, output_path: str = "inventory_report.html")
         output_path: Path to save the HTML file
     """
     try:
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
         # Try to import markdown with extension support
         import markdown
         from markdown.extensions import tables
@@ -510,6 +513,8 @@ def save_report_as_html(report: str, output_path: str = "inventory_report.html")
         # Save as plain markdown as a last resort
         try:
             markdown_path = output_path.replace('.html', '.md')
+            # Create output directory if it doesn't exist
+            os.makedirs(os.path.dirname(markdown_path), exist_ok=True)
             with open(markdown_path, 'w', encoding='utf-8') as f:
                 f.write(report)
             print(f"Report saved as Markdown: {markdown_path}")
@@ -528,7 +533,7 @@ def generate_report_with_insights(restock_df: pd.DataFrame,
                                   azure_endpoint: Optional[str] = None,
                                   azure_deployment: Optional[str] = None,
                                   save_html: bool = True,
-                                  output_path: str = "inventory_report.html") -> str:
+                                  output_path: str = "dist/reports/inventory_report.html") -> str:
     """Generate a comprehensive report with AI-enhanced insights and visualizations"""
     
     insight_generator = AIInsightGenerator(
@@ -639,9 +644,9 @@ conditions to finalize inventory decisions.
 # Add this function at the end of the file
 def generate_inventory_reports(restock_df: pd.DataFrame, 
                               feature_data: pd.DataFrame,
-                              md_output_path: str = "inventory_summary.md",
-                              html_output_path: str = "inventory_dashboard.html",
-                              pdf_output_path: str = "inventory_report.pdf") -> Tuple[str, str, Optional[str]]:
+                              md_output_path: str = "dist/reports/inventory_summary.md",
+                              html_output_path: str = "dist/reports/inventory_dashboard.html",
+                              pdf_output_path: str = "dist/reports/inventory_report.pdf") -> Tuple[str, str, Optional[str]]:
     """
     Generate brief markdown summary, HTML dashboard, and PDF report for inventory management
     
@@ -655,6 +660,11 @@ def generate_inventory_reports(restock_df: pd.DataFrame,
     Returns:
         Tuple of (markdown_path, html_path, pdf_path) with the saved file paths
     """
+    # Create output directories if they don't exist
+    os.makedirs(os.path.dirname(md_output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(html_output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(pdf_output_path), exist_ok=True)
+    
     if REPORT_GENERATOR_AVAILABLE:
         # Use the dedicated report generator module
         return save_reports(restock_df, feature_data, md_output_path, html_output_path, pdf_output_path)

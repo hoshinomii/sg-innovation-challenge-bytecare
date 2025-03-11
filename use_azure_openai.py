@@ -43,13 +43,25 @@ def main():
     if insight_generator.provider == "azure":
         print("Successfully configured AIInsightGenerator with Azure OpenAI")
         
+        # Create output directory if it doesn't exist
+        output_dir = "dist/reports"
+        os.makedirs(output_dir, exist_ok=True)
+        
         # Generate inventory insights
         insights = insight_generator.generate_inventory_insights(restock_df)
         
+        # Save insights to a file in the output directory
+        output_path = f"{output_dir}/azure_openai_insights.txt"
+        with open(output_path, 'w') as f:
+            f.write(insights)
+        
         print("\n--- Generated Inventory Insights ---\n")
         print(insights)
+        print(f"\nInsights saved to {output_path}")
     else:
         print(f"Failed to configure Azure. Current provider: {insight_generator.provider}")
 
 if __name__ == "__main__":
+    # Ensure directories exist
+    os.makedirs("dist/reports", exist_ok=True)
     main()

@@ -17,7 +17,7 @@ except ImportError:
     AI_INSIGHTS_AVAILABLE = False
     print("AI insights module not available. Running without AI explanations.")
 
-def load_model(model_path='demand_prediction_model.pkl'):
+def load_model(model_path='dist/models/demand_prediction_model.pkl'):
     """Load the trained demand prediction model"""
     print(f"Loading model from {model_path}")
     
@@ -207,12 +207,16 @@ def generate_restock_recommendations(data, model, forecast_days=7, safety_stock_
     restock_df['recommended_restock'] = restock_df['recommended_restock'].round(0)
     restock_df['estimated_cost'] = restock_df['estimated_cost'].round(2)
     
+    # Add a priority column
+    restock_df['priority'] = pd.qcut(restock_df['recommended_restock'], 
+                                     q=3, 
+                                     labels=['Low', 'Medium', 'High'])
+    
     # Sort by recommended restock amount
     restock_df = restock_df.sort_values('recommended_restock', ascending=False)
     
     return restock_df
 
-# Update this function to match the signature in ai_insights.py
 def generate_ai_insights(restock_df, feature_data, gemini_api_key=None, gemini_model=None):
     """Generate AI insights on the prediction results"""
     if not AI_INSIGHTS_AVAILABLE:
@@ -229,10 +233,12 @@ def generate_ai_insights(restock_df, feature_data, gemini_api_key=None, gemini_m
         )
         
         # Save the report to a file
-        with open('prediction_insights_report.md', 'w') as f:
+        report_path = 'dist/reports/prediction_insights_report.md'
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, 'w') as f:
             f.write(report)
         
-        print("AI insights generated and saved to 'prediction_insights_report.md'")
+        print(f"AI insights generated and saved to '{report_path}'")
         return report
     except Exception as e:
         print(f"Error generating AI insights: {e}")
@@ -241,12 +247,14 @@ def generate_ai_insights(restock_df, feature_data, gemini_api_key=None, gemini_m
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Generate inventory restock predictions')
-    parser.add_argument('--model_path', type=str, default='demand_prediction_model.pkl',
+    parser.add_argument('--model_path', type=str, default='dist/models/demand_prediction_model.pkl',
                         help='Path to the trained model file')
     parser.add_argument('--data_path', type=str, default='dataset/supermarket_data.csv',
                         help='Path to the dataset file')
-    parser.add_argument('--output_path', type=str, default='new_restock_recommendations.csv',
+    parser.add_argument('--output_path', type=str, default='dist/data/restock_recommendations.csv',
                         help='Path to save the recommendations file')
+    parser.add_argument('--detailed_output', action='store_true',
+                        help='Generate additional detailed CSV output files')
     parser.add_argument('--api_key', type=str, help='API key for OpenAI services')
     parser.add_argument('--gemini_api_key', type=str, help='API key for Google Gemini')
     parser.add_argument('--ai_provider', type=str, default=os.environ.get('DEFAULT_AI_PROVIDER', 'auto'), 
@@ -267,12 +275,45 @@ def main():
     # Generate recommendations
     recommendations = generate_restock_recommendations(feature_data, model)
     
-    # Save recommendations
-    recommendations.to_csv(args.output_path)
+    # Format output columns
+    output_recommendations = recommendations.copy()
     
-    print(f"\nRestock recommendations saved to {args.output_path}")
+    # Convert numeric columns to integers where appropriate
+    int_columns = ['predicted_weekly_demand', 'safety_stock', 'recommended_restock']
+    output_recommendations[int_columns] = output_recommendations[int_columns].astype(int)
+    
+    # Save recommendations
+    try:
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+        output_recommendations.to_csv(args.output_path, index_label='StockCode')
+        print(f"\n✓ Success: Restock recommendations CSV saved to '{args.output_path}'")
+    except Exception as e:
+        print(f"\n❌ Error saving CSV file: {e}")
+    
+    # Create additional detailed outputs if requested
+    if args.detailed_output:
+        # High priority items only
+        try:
+            high_priority = output_recommendations[output_recommendations['priority'] == 'High']
+            high_priority_path = args.output_path.replace('.csv', '_high_priority.csv')
+            high_priority.to_csv(high_priority_path, index_label='StockCode')
+            print(f"✓ High priority items saved to '{high_priority_path}'")
+            
+            # Summary statistics by priority
+            summary_path = args.output_path.replace('.csv', '_summary.csv')
+            summary = output_recommendations.groupby('priority').agg({
+                'recommended_restock': ['count', 'sum'],
+                'estimated_cost': 'sum'
+            })
+            summary.columns = ['item_count', 'total_units', 'total_cost']
+            summary.to_csv(summary_path)
+            print(f"✓ Summary statistics saved to '{summary_path}'")
+        except Exception as e:
+            print(f"❌ Error creating detailed outputs: {e}")
+    
     print("\nTop 10 products to restock:")
-    print(recommendations[['Description', 'predicted_weekly_demand', 'recommended_restock', 'estimated_cost']].head(10))
+    print(output_recommendations[['Description', 'predicted_weekly_demand', 'recommended_restock', 'estimated_cost', 'priority']].head(10))
     
     # Generate AI insights if requested
     if args.use_ai or os.environ.get('ALWAYS_USE_AI', '').lower() == 'true':
