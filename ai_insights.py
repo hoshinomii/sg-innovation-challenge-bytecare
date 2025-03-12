@@ -92,7 +92,7 @@ class AIInsightGenerator:
             # Try both providers in sequence, starting with the default from env if available
             print("Auto-selecting provider")
             
-            if env_provider == "gemini":
+            if (env_provider == "gemini"):
                 # Try Gemini first, then fall back to Azure
                 self._setup_gemini()
                 if self.provider == "template":  # If Gemini setup failed
@@ -322,16 +322,33 @@ def create_product_trend_graph(product_data: pd.DataFrame, product_name: str, st
         plt.plot(product_data['InvoiceDate'], product_data['Quantity'], marker='o', linestyle='-')
         plt.title(f'Sales Trend for {product_name} (Code: {stockcode})')
         plt.xlabel('Date')
-        plt.ylabel('Quantity Sold')
+        plt.ylabel('Quantity Sold (units)')
         plt.grid(True, alpha=0.3)
         plt.xticks(rotation=45)
+        
+        # Add annotations for maximum and minimum points
+        max_idx = product_data['Quantity'].idxmax()
+        min_idx = product_data['Quantity'].idxmin()
+        
+        plt.annotate(f'Max: {product_data.loc[max_idx, "Quantity"]}', 
+                    xy=(product_data.loc[max_idx, 'InvoiceDate'], product_data.loc[max_idx, 'Quantity']),
+                    xytext=(10, 10), textcoords='offset points',
+                    arrowprops=dict(arrowstyle='->'))
+        
+        # Only annotate minimum if it's different from maximum
+        if max_idx != min_idx:
+            plt.annotate(f'Min: {product_data.loc[min_idx, "Quantity"]}', 
+                        xy=(product_data.loc[min_idx, 'InvoiceDate'], product_data.loc[min_idx, 'Quantity']),
+                        xytext=(10, -15), textcoords='offset points',
+                        arrowprops=dict(arrowstyle='->'))
+                        
         plt.tight_layout()
     else:
         # If no time data available, create a bar chart of quantities
         plt.bar(range(len(product_data)), product_data['Quantity'])
         plt.title(f'Sales Distribution for {product_name} (Code: {stockcode})')
         plt.xlabel('Sales Event')
-        plt.ylabel('Quantity Sold')
+        plt.ylabel('Quantity Sold (units)')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
     
@@ -346,19 +363,51 @@ def create_product_trend_graph(product_data: pd.DataFrame, product_name: str, st
 
 def create_top_items_graph(restock_df: pd.DataFrame) -> str:
     """Create a graph showing top items to restock and return as base64 image"""
-    # Take top 10 items for the graph
-    top_items = restock_df.head(10).copy()
+    # Take top 10 items for the graph, but ensure we have different priorities
+    high_priority = restock_df[restock_df['priority'] == 'High'].head(4)
+    medium_priority = restock_df[restock_df['priority'] == 'Medium'].head(3)
+    low_priority = restock_df[restock_df['priority'] == 'Low'].head(3)
+    
+    # Combine the priorities
+    top_items = pd.concat([high_priority, medium_priority, low_priority])
+    
+    if len(top_items) == 0:  # If no priority column, just take top 10
+        top_items = restock_df.head(10).copy()
     
     plt.figure(figsize=(12, 8))
     
     # Create a horizontal bar chart with product descriptions and recommended restock quantities
-    descriptions = [str(desc)[:30] + '...' if len(str(desc)) > 30 else str(desc) for desc in top_items['Description']]
+    descriptions = [str(desc)[:25] + '...' if len(str(desc)) > 25 else str(desc) for desc in top_items['Description']]
     y_pos = np.arange(len(descriptions))
     
-    plt.barh(y_pos, top_items['recommended_restock'], align='center')
+    # Color bars by priority if available
+    if 'priority' in top_items.columns:
+        colors = {'High': 'red', 'Medium': 'orange', 'Low': 'blue'}
+        bar_colors = [colors.get(p, 'gray') for p in top_items['priority']]
+        
+        bars = plt.barh(y_pos, top_items['recommended_restock'], align='center', color=bar_colors)
+        
+        # Add a legend
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor=color, label=priority) 
+                          for priority, color in colors.items() 
+                          if priority in top_items['priority'].values]
+        plt.legend(handles=legend_elements, loc='lower right')
+    else:
+        bars = plt.barh(y_pos, top_items['recommended_restock'], align='center')
+    
     plt.yticks(y_pos, descriptions)
-    plt.xlabel('Recommended Restock Quantity')
-    plt.title('Top 10 Items to Restock')
+    plt.xlabel('Recommended Restock Quantity (units)')
+    plt.ylabel('Product Description')
+    plt.title('Key Products to Restock by Priority')
+    
+    # Add quantity labels to the end of each bar
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        label_x_pos = width * 1.01  # Position slightly to the right of the bar
+        plt.text(label_x_pos, bar.get_y() + bar.get_height()/2, f'{int(width)}',
+                va='center')
+    
     plt.tight_layout()
     
     # Convert plot to base64 string for embedding in markdown
@@ -368,7 +417,7 @@ def create_top_items_graph(restock_df: pd.DataFrame) -> str:
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
     plt.close()
     
-    return f"![Top 10 Items to Restock](data:image/png;base64,{image_base64})"
+    return f"![Key Products to Restock](data:image/png;base64,{image_base64})"
 
 def save_report_as_html(report: str, output_path: str = "dist/reports/inventory_report.html"):
     """Save the markdown report as an HTML file for easy viewing of embedded images
@@ -547,15 +596,25 @@ def generate_report_with_insights(restock_df: pd.DataFrame,
     # Generate overall inventory insights
     inventory_summary = insight_generator.generate_inventory_insights(restock_df)
     
-    # Top 10 items section with demand and restock amounts
-    top_10_items = restock_df.head(10).copy()
-    
-    # Create visualization for top 10 items
+    # Create visualization for items to restock by priority
     top_items_graph = create_top_items_graph(restock_df)
     
-    # Generate specific insights for top products
+    # Generate specific insights for top products across different priorities
     product_insights = []
-    for idx, row in restock_df.head(5).iterrows():
+    
+    # First, try to select products with different priorities
+    selected_products = []
+    if 'priority' in restock_df.columns:
+        # Get some products from each priority level
+        high_priority = restock_df[restock_df['priority'] == 'High'].head(2)
+        medium_priority = restock_df[restock_df['priority'] == 'Medium'].head(2)
+        low_priority = restock_df[restock_df['priority'] == 'Low'].head(1)
+        selected_products = pd.concat([high_priority, medium_priority, low_priority])
+    else:
+        # If no priority column, just take top 5
+        selected_products = restock_df.head(5)
+    
+    for idx, row in selected_products.iterrows():
         try:
             product_data = feature_data[feature_data['StockCode'] == idx]
             product_name = row['Description']
@@ -568,13 +627,16 @@ def generate_report_with_insights(restock_df: pd.DataFrame,
             # Create graph for this product
             product_graph = create_product_trend_graph(product_data, product_name, idx)
             
+            priority = row.get('priority', 'N/A')
+            
             product_insights.append({
                 'product_code': idx,
                 'product_name': product_name,
                 'recommended_restock': row['recommended_restock'],
                 'trend_explanation': trend_explanation,
                 'restock_reasoning': restock_reasoning,
-                'graph': product_graph
+                'graph': product_graph,
+                'priority': priority
             })
         except Exception as e:
             print(f"Error generating insights for product {idx}: {e}")
@@ -587,34 +649,82 @@ Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
 ## Executive Summary
 {inventory_summary.strip()}
 
-## Top 10 Items for Restocking
-The following chart shows the top 10 items that need restocking:
+## Key Products for Restocking
+The following chart shows the key products that need restocking, by priority level:
 
 {top_items_graph}
 
-The following table provides detailed information on these items:
+## Detailed Analysis by Priority
 
+### High Priority Items
 """
-    
-    # Add top 10 items table
-    report += "| Product Code | Description | Predicted Weekly Demand | Recommended Restock |\n"
-    report += "|-------------|-------------|------------------------|---------------------|\n"
-    
-    for idx, row in top_10_items.iterrows():
-        product_name = row['Description']
-        if pd.isna(product_name) or product_name == "Unknown":
-            product_name = f"Product {idx}"
-            
-        # Handle both key naming conventions
-        weekly_demand = row.get('predicted_weekly_demand', row.get('predicted_demand', 'N/A'))
+
+    # Add high priority items if any
+    high_priority_items = restock_df[restock_df['priority'] == 'High'].head(5)
+    if not high_priority_items.empty:
+        report += "| Product Code | Description | Predicted Demand | Recommended Restock | Est. Cost |\n"
+        report += "|-------------|-------------|-----------------|-------------------|----------|\n"
         
-        report += f"| {idx} | {product_name} | {weekly_demand} | {row['recommended_restock']} |\n"
+        for idx, row in high_priority_items.iterrows():
+            product_name = row['Description']
+            if pd.isna(product_name) or product_name == "Unknown":
+                product_name = f"Product {idx}"
+                
+            # Handle both key naming conventions
+            weekly_demand = row.get('predicted_weekly_demand', row.get('predicted_demand', 'N/A'))
+            est_cost = row.get('estimated_cost', row.get('avg_price', 0) * row['recommended_restock'])
+            
+            report += f"| {idx} | {product_name} | {weekly_demand} | {row['recommended_restock']} | ${est_cost:.2f} |\n"
+    else:
+        report += "*No high priority items identified.*\n"
     
-    report += "\n## Top Product Details\n"
+    report += "\n### Medium Priority Items\n"
+    
+    # Add medium priority items if any
+    medium_priority_items = restock_df[restock_df['priority'] == 'Medium'].head(4)
+    if not medium_priority_items.empty:
+        report += "| Product Code | Description | Predicted Demand | Recommended Restock |\n"
+        report += "|-------------|-------------|-----------------|-------------------|\n"
+        
+        for idx, row in medium_priority_items.iterrows():
+            product_name = row['Description']
+            if pd.isna(product_name) or product_name == "Unknown":
+                product_name = f"Product {idx}"
+                
+            # Handle both key naming conventions
+            weekly_demand = row.get('predicted_weekly_demand', row.get('predicted_demand', 'N/A'))
+            
+            report += f"| {idx} | {product_name} | {weekly_demand} | {row['recommended_restock']} |\n"
+    else:
+        report += "*No medium priority items identified.*\n"
+    
+    report += "\n### Low Priority Items\n"
+    
+    # Add low priority items if any
+    low_priority_items = restock_df[restock_df['priority'] == 'Low'].head(3)
+    if not low_priority_items.empty:
+        report += "| Product Code | Description | Predicted Demand | Recommended Restock |\n"
+        report += "|-------------|-------------|-----------------|-------------------|\n"
+        
+        for idx, row in low_priority_items.iterrows():
+            product_name = row['Description']
+            if pd.isna(product_name) or product_name == "Unknown":
+                product_name = f"Product {idx}"
+                
+            # Handle both key naming conventions
+            weekly_demand = row.get('predicted_weekly_demand', row.get('predicted_demand', 'N/A'))
+            
+            report += f"| {idx} | {product_name} | {weekly_demand} | {row['recommended_restock']} |\n"
+    else:
+        report += "*No low priority items identified.*\n"
+    
+    report += "\n## Product Trend Analysis\n"
     
     for p in product_insights:
+        # Add priority to heading if available
+        priority_text = f" (Priority: {p['priority']})" if p['priority'] != 'N/A' else ""
         report += f"""
-### {p['product_name']} (Code: {p['product_code']})
+### {p['product_name']} (Code: {p['product_code']}){priority_text}
 **Recommended Restock Quantity:** {p['recommended_restock']}
 
 {p['graph']}
@@ -672,24 +782,72 @@ def generate_inventory_reports(restock_df: pd.DataFrame,
         # Fall back to simplified report generation
         print("Using simplified report generation (report_generator module not available)")
         
+        # Get items of different priorities if available
+        has_priority = 'priority' in restock_df.columns
+        
         # Generate and save markdown report
         markdown_report = f"""# Inventory Restock Summary
 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 ## Overview
 - Total products to restock: {len(restock_df)}
-- Urgent items: {len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])}
-- Total units to restock: {int(restock_df['recommended_restock'].sum())}
+"""
 
-## Top 5 Items to Restock
+        if has_priority:
+            high_count = len(restock_df[restock_df['priority'] == 'High'])
+            medium_count = len(restock_df[restock_df['priority'] == 'Medium'])
+            low_count = len(restock_df[restock_df['priority'] == 'Low'])
+            
+            markdown_report += f"""- High priority items: {high_count}
+- Medium priority items: {medium_count}
+- Low priority items: {low_count}
+"""
+        else:
+            urgent_items = len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])
+            markdown_report += f"- Urgent items: {urgent_items}\n"
+            
+        markdown_report += f"- Total units to restock: {int(restock_df['recommended_restock'].sum())}\n\n"
+
+        # Add high priority items section if available
+        if has_priority:
+            markdown_report += """## High Priority Items
 | Product | Recommended Restock |
-|---------|---------------------|"""
+|---------|---------------------|\n"""
 
-        # Add top 5 items
-        top_items = restock_df.head(5)
-        for idx, row in top_items.iterrows():
-            product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
-            markdown_report += f"\n| {product_name} | {row['recommended_restock']} |"
+            high_items = restock_df[restock_df['priority'] == 'High'].head(5)
+            for idx, row in high_items.iterrows():
+                product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+                markdown_report += f"| {product_name} | {row['recommended_restock']} |\n"
+                
+            # Add medium priority items
+            markdown_report += """\n## Medium Priority Items
+| Product | Recommended Restock |
+|---------|---------------------|\n"""
+
+            medium_items = restock_df[restock_df['priority'] == 'Medium'].head(3)
+            for idx, row in medium_items.iterrows():
+                product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+                markdown_report += f"| {product_name} | {row['recommended_restock']} |\n"
+                
+            # Add low priority items
+            markdown_report += """\n## Low Priority Items
+| Product | Recommended Restock |
+|---------|---------------------|\n"""
+
+            low_items = restock_df[restock_df['priority'] == 'Low'].head(2)
+            for idx, row in low_items.iterrows():
+                product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+                markdown_report += f"| {product_name} | {row['recommended_restock']} |\n"
+        else:
+            # Just add top items if no priority
+            markdown_report += """## Top Items to Restock
+| Product | Recommended Restock |
+|---------|---------------------|\n"""
+
+            top_items = restock_df.head(5)
+            for idx, row in top_items.iterrows():
+                product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+                markdown_report += f"| {product_name} | {row['recommended_restock']} |\n"
         
         # Save markdown report
         with open(md_output_path, 'w', encoding='utf-8') as f:
@@ -702,9 +860,13 @@ Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
     <title>Inventory Dashboard</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
-        table {{ border-collapse: collapse; width: 100%; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
         th, td {{ border: 1px solid #ddd; padding: 8px; }}
         th {{ background-color: #f2f2f2; }}
+        .high {{ background-color: #ffdddd; }}
+        .medium {{ background-color: #ffffcc; }}
+        .low {{ background-color: #ddffdd; }}
+        h2 {{ color: #333366; }}
     </style>
 </head>
 <body>
@@ -713,26 +875,67 @@ Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
     
     <h2>Summary</h2>
     <ul>
-        <li>Total products to restock: {len(restock_df)}</li>
-        <li>Urgent items: {len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])}</li>
+        <li>Total products to restock: {len(restock_df)}</li>"""
+        
+        if has_priority:
+            high_count = len(restock_df[restock_df['priority'] == 'High'])
+            medium_count = len(restock_df[restock_df['priority'] == 'Medium'])
+            low_count = len(restock_df[restock_df['priority'] == 'Low'])
+            
+            html_report += f"""
+        <li>High priority items: {high_count}</li>
+        <li>Medium priority items: {medium_count}</li>
+        <li>Low priority items: {low_count}</li>"""
+        else:
+            urgent_items = len(restock_df[restock_df['recommended_restock'] > restock_df['recommended_restock'].mean()])
+            html_report += f"\n        <li>Urgent items: {urgent_items}</li>"
+            
+        html_report += f"""
         <li>Total units to restock: {int(restock_df['recommended_restock'].sum())}</li>
     </ul>
     
-    <h2>Inventory Restock Table</h2>
+    <h2>Inventory Restock by Priority</h2>
     <table>
         <tr>
+            <th>Priority</th>
             <th>Product</th>
-            <th>Recommended Restock</th>
-        </tr>"""
-        
-        # Add all items to the HTML table
-        for idx, row in restock_df.iterrows():
-            product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
-            html_report += f"""
-        <tr>
+            <th>Predicted Demand</th>
+            <th>Recommended Restock</th>"""
+            
+        # Add estimated cost column if available
+        if 'estimated_cost' in restock_df.columns:
+            html_report += "\n            <th>Estimated Cost</th>"
+            
+        html_report += "\n        </tr>"
+            
+        # Function to add table rows with appropriate CSS class
+        def add_table_rows(priority_items, priority_class):
+            nonlocal html_report
+            for idx, row in priority_items.iterrows():
+                product_name = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+                demand = row.get('predicted_weekly_demand', row.get('predicted_demand', 'N/A'))
+                
+                html_report += f"""
+        <tr class="{priority_class}">
+            <td>{row.get('priority', priority_class.capitalize())}</td>
             <td>{product_name}</td>
-            <td>{row['recommended_restock']}</td>
-        </tr>"""
+            <td>{demand}</td>
+            <td>{row['recommended_restock']}</td>"""
+                
+                # Add cost column if available
+                if 'estimated_cost' in row:
+                    html_report += f"\n            <td>${row['estimated_cost']:.2f}</td>"
+                    
+                html_report += "\n        </tr>"
+        
+        # Add items by priority if available
+        if has_priority:
+            add_table_rows(restock_df[restock_df['priority'] == 'High'].head(5), "high")
+            add_table_rows(restock_df[restock_df['priority'] == 'Medium'].head(4), "medium")
+            add_table_rows(restock_df[restock_df['priority'] == 'Low'].head(3), "low")
+        else:
+            # Just add all items with top items first
+            add_table_rows(restock_df.head(10), "normal")
             
         # Close HTML
         html_report += """

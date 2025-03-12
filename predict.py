@@ -287,7 +287,7 @@ def main():
         # Create output directory if it doesn't exist
         os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
         output_recommendations.to_csv(args.output_path, index_label='StockCode')
-        print(f"\n✓ Success: Restock recommendations CSV saved to '{args.output_path}'")
+        print(f"\n✅ Success: Restock recommendations CSV saved to '{args.output_path}'")
     except Exception as e:
         print(f"\n❌ Error saving CSV file: {e}")
     
@@ -298,7 +298,19 @@ def main():
             high_priority = output_recommendations[output_recommendations['priority'] == 'High']
             high_priority_path = args.output_path.replace('.csv', '_high_priority.csv')
             high_priority.to_csv(high_priority_path, index_label='StockCode')
-            print(f"✓ High priority items saved to '{high_priority_path}'")
+            print(f"✅ High priority items saved to '{high_priority_path}'")
+            
+            # Medium priority items
+            medium_priority = output_recommendations[output_recommendations['priority'] == 'Medium']
+            medium_priority_path = args.output_path.replace('.csv', '_medium_priority.csv')
+            medium_priority.to_csv(medium_priority_path, index_label='StockCode')
+            print(f"✅ Medium priority items saved to '{medium_priority_path}'")
+            
+            # Low priority items
+            low_priority = output_recommendations[output_recommendations['priority'] == 'Low']
+            low_priority_path = args.output_path.replace('.csv', '_low_priority.csv')
+            low_priority.to_csv(low_priority_path, index_label='StockCode')
+            print(f"✅ Low priority items saved to '{low_priority_path}'")
             
             # Summary statistics by priority
             summary_path = args.output_path.replace('.csv', '_summary.csv')
@@ -308,15 +320,74 @@ def main():
             })
             summary.columns = ['item_count', 'total_units', 'total_cost']
             summary.to_csv(summary_path)
-            print(f"✓ Summary statistics saved to '{summary_path}'")
+            print(f"✅ Summary statistics saved to '{summary_path}'")
         except Exception as e:
             print(f"❌ Error creating detailed outputs: {e}")
     
-    print("\nTop 10 products to restock:")
-    print(output_recommendations[['Description', 'predicted_weekly_demand', 'recommended_restock', 'estimated_cost', 'priority']].head(10))
+    print("\n" + "="*120)
+    print("🔍 TOP RESTOCK RECOMMENDATIONS BY PRIORITY")
+    print("="*120)
+    
+    # Display top 5 high priority items in table format
+    high_priority = output_recommendations[output_recommendations['priority'] == 'High'].head(5)
+    if not high_priority.empty:
+        print("\n🔴 HIGH PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in high_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            print(f"{idx:<12} {desc:<40} {row['predicted_weekly_demand']:<15} {row['recommended_restock']:<15} ${row['estimated_cost']:<14.2f}")
+    
+    # Display top 5 medium priority items in table format
+    medium_priority = output_recommendations[output_recommendations['priority'] == 'Medium'].head(5)
+    if not medium_priority.empty:
+        print("\n🟠 MEDIUM PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in medium_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            print(f"{idx:<12} {desc:<40} {row['predicted_weekly_demand']:<15} {row['recommended_restock']:<15} ${row['estimated_cost']:<14.2f}")
+    
+    # Display top 5 low priority items in table format
+    low_priority = output_recommendations[output_recommendations['priority'] == 'Low'].head(5)
+    if not low_priority.empty:
+        print("\n🟢 LOW PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in low_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            print(f"{idx:<12} {desc:<40} {row['predicted_weekly_demand']:<15} {row['recommended_restock']:<15} ${row['estimated_cost']:<14.2f}")
+    
+    # Display summary statistics
+    print("\n📊 SUMMARY STATISTICS")
+    print("-"*80)
+    for priority in ['High', 'Medium', 'Low']:
+        priority_items = output_recommendations[output_recommendations['priority'] == priority]
+        if not priority_items.empty:
+            item_count = len(priority_items)
+            total_units = priority_items['recommended_restock'].sum()
+            total_cost = priority_items['estimated_cost'].sum()
+            
+            # Pick emoji based on priority
+            emoji = "🔴" if priority == 'High' else "🟠" if priority == 'Medium' else "🟢"
+            print(f"{emoji} {priority} Priority: {item_count} items, {int(total_units)} units, ${total_cost:.2f}")
+    print("="*80)
     
     # Generate AI insights if requested
     if args.use_ai or os.environ.get('ALWAYS_USE_AI', '').lower() == 'true':
+        print("\n🧠 Generating AI insights...")
         gemini_api_key = args.gemini_api_key or os.environ.get("GEMINI_API_KEY")
         gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
         
@@ -327,6 +398,12 @@ def main():
                 gemini_api_key=gemini_api_key,
                 gemini_model=gemini_model
             )
+            print("✅ AI insights generation complete!")
+        else:
+            if not gemini_api_key:
+                print("❌ Missing Gemini API key. Set GEMINI_API_KEY environment variable or use --gemini_api_key")
+            if not AI_INSIGHTS_AVAILABLE:
+                print("❌ AI insights module not available. Make sure ai_insights.py is in the same directory.")
 
 if __name__ == "__main__":
     main()

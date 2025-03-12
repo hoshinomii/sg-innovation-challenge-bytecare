@@ -235,7 +235,7 @@ def build_demand_model(data):
 
 # Calculate restock recommendation
 def calculate_restock_recommendations(data, model, last_n_days=30, safety_stock_factor=1.5, lead_time=7):
-    print("Calculating restock recommendations...")
+    print("📊 Calculating restock recommendations...")
     
     # Get the latest date in the dataset
     latest_date = data['Date'].max()
@@ -313,11 +313,25 @@ def calculate_restock_recommendations(data, model, last_n_days=30, safety_stock_
     restock_df['safety_stock'] = restock_df['safety_stock'].round(0)
     restock_df['recommended_restock'] = restock_df['recommended_restock'].round(0)
     
+    # Calculate estimated cost
+    restock_df['estimated_cost'] = restock_df['recommended_restock'] * restock_df['avg_price']
+    
+    # Add a priority column
+    restock_df['priority'] = pd.qcut(restock_df['recommended_restock'], 
+                                     q=3, 
+                                     labels=['Low', 'Medium', 'High'])
+    
     # Sort by recommended restock amount
     restock_df = restock_df.sort_values('recommended_restock', ascending=False)
     
+    # Create directory if it doesn't exist
+    reports_dir = 'dist/reports'
+    os.makedirs(reports_dir, exist_ok=True)
+    
     # Save recommendations to CSV
-    restock_df.to_csv('restock_recommendations.csv')
+    csv_path = os.path.join(reports_dir, 'restock_recommendations.csv')
+    restock_df.to_csv(csv_path)
+    print(f"✅ Restock recommendations saved to {csv_path}")
     
     return restock_df
 
@@ -422,22 +436,84 @@ def main():
     csv_path = os.path.join(reports_dir, 'restock_recommendations.csv')
     restock_recommendations.to_csv(csv_path)
     
-    # Print top recommendations
-    print("\nTop 10 Restock Recommendations:")
-    print(restock_recommendations[['Description', 'predicted_weekly_demand', 'recommended_restock']].head(10))
+    print("\n" + "="*120)
+    print("🔍 TOP RESTOCK RECOMMENDATIONS BY PRIORITY")
+    print("="*120)
+    
+    # Display top 5 high priority items in table format
+    high_priority = restock_recommendations[restock_recommendations['priority'] == 'High'].head(5)
+    if not high_priority.empty:
+        print("\n🔴 HIGH PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in high_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            estimated_cost = row['avg_price'] * row['recommended_restock']
+            print(f"{idx:<12} {desc:<40} {int(row['predicted_weekly_demand']):<15} {int(row['recommended_restock']):<15} ${estimated_cost:<14.2f}")
+    
+    # Display top 5 medium priority items in table format
+    medium_priority = restock_recommendations[restock_recommendations['priority'] == 'Medium'].head(5)
+    if not medium_priority.empty:
+        print("\n🟠 MEDIUM PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in medium_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            estimated_cost = row['avg_price'] * row['recommended_restock']
+            print(f"{idx:<12} {desc:<40} {int(row['predicted_weekly_demand']):<15} {int(row['recommended_restock']):<15} ${estimated_cost:<14.2f}")
+    
+    # Display top 5 low priority items in table format
+    low_priority = restock_recommendations[restock_recommendations['priority'] == 'Low'].head(5)
+    if not low_priority.empty:
+        print("\n🟢 LOW PRIORITY ITEMS")
+        print("-"*120)
+        # Print table header
+        print(f"{'Stock Code':<12} {'Description':<40} {'Weekly Demand':<15} {'Restock Amt':<15} {'Est. Cost':<15}")
+        print("-"*120)
+        for idx, row in low_priority.iterrows():
+            desc = row['Description'] if not pd.isna(row['Description']) else f"Product {idx}"
+            # Truncate description if too long
+            desc = desc[:37] + "..." if len(desc) > 37 else desc.ljust(37)
+            estimated_cost = row['avg_price'] * row['recommended_restock']
+            print(f"{idx:<12} {desc:<40} {int(row['predicted_weekly_demand']):<15} {int(row['recommended_restock']):<15} ${estimated_cost:<14.2f}")
+    
+    # Display summary statistics
+    print("\n📊 SUMMARY STATISTICS")
+    print("-"*80)
+    for priority in ['High', 'Medium', 'Low']:
+        priority_items = restock_recommendations[restock_recommendations['priority'] == priority]
+        if not priority_items.empty:
+            item_count = len(priority_items)
+            total_units = priority_items['recommended_restock'].sum()
+            total_cost = (priority_items['recommended_restock'] * priority_items['avg_price']).sum()
+            
+            # Pick emoji based on priority
+            emoji = "🔴" if priority == 'High' else "🟠" if priority == 'Medium' else "🟢"
+            print(f"{emoji} {priority} Priority: {item_count} items, {int(total_units)} units, ${total_cost:.2f}")
+    print("="*80)
     
     # Generate AI insights if available
     gemini_api_key = args.gemini_api_key or os.environ.get("GEMINI_API_KEY")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
     
     if gemini_api_key and AI_INSIGHTS_AVAILABLE:
+        print("\n🧠 Generating AI insights...")
         insights = generate_ai_insights(restock_recommendations, feature_data, 
                                         gemini_api_key=gemini_api_key,
                                         gemini_model=gemini_model)
+        print("✅ AI insights generation complete!")
     
-    print(f"\nDone! Restock recommendations saved to '{csv_path}'")
-    if AI_INSIGHTS_AVAILABLE:
-        print(f"AI-powered insights saved to '{os.path.join(reports_dir, 'inventory_insights_report.md')}'")
-
+    print(f"\n✅ Done! Restock recommendations saved to '{csv_path}'")
+    if AI_INSIGHTS_AVAILABLE and gemini_api_key:
+        print(f"✅ AI-powered insights saved to '{os.path.join(reports_dir, 'inventory_insights_report.md')}'")
+    
 if __name__ == "__main__":
     main()
